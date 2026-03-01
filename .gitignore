@@ -3,3 +3,4 @@ deps/build.log
 *.dylib
 *.so
 *.dll
+# Artifacts.toml is intentionally tracked in git (not ignored here)

@@ -1,0 +1,7 @@
+[[TypeDBClient_jll]]
+arch = "x86_64"
+cxxstring_abi = "cxx11"
+git-tree-sha1 = "0631822354eb0835a8449f90ad1df9e0b08b5b9d"
+julia_version = "1.9.2"
+libgfortran_version = "5.0.0"
+os = "macos"

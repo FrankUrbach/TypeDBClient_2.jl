@@ -1,17 +1,30 @@
 module TypeDBClient
 
 # ─── Load deps (provides `libtypedb` and `check_deps`) ────────────────────────
-const _DEPS_FILE = joinpath(@__DIR__, "..", "deps", "deps.jl")
+using Artifacts, Libdl
 
-if isfile(_DEPS_FILE)
-    include(_DEPS_FILE)
-else
-    # Fallback: define a placeholder so the module at least compiles.
-    # Users must run `Pkg.build("TypeDBClient")` to generate deps.jl.
-    const libtypedb = ""
-    function check_deps()
-        error("deps/deps.jl not found. Run `Pkg.build(\"TypeDBClient\")` first.")
-    end
+const _ARTIFACTS_TOML = joinpath(@__DIR__, "..", "Artifacts.toml")
+include_dependency(_ARTIFACTS_TOML)   # invalidate precompile cache when Artifacts.toml changes
+
+function _find_libtypedb()
+    isfile(_ARTIFACTS_TOML) || return ""
+    hash = artifact_hash("TypeDBClient_jll", _ARTIFACTS_TOML)
+    hash === nothing && return ""
+    artifact_exists(hash) || return ""
+    dir = artifact_path(hash)
+    joinpath(dir, "lib", "libtypedb_driver_clib.$(Libdl.dlext)")
+end
+
+const libtypedb = _find_libtypedb()
+
+function check_deps()
+    isempty(libtypedb) &&
+        error("TypeDB driver artifact not found.\n" *
+              "Run `Pkg.build(\"TypeDBClient\")` after setting " *
+              "TYPEDB_DRIVER_SRC or TYPEDB_DRIVER_LIB.")
+    isfile(libtypedb) ||
+        error("TypeDB driver library not found at: $(libtypedb)")
+    Libdl.dlopen(libtypedb)
 end
 
 # ─── Handle type aliases (Ptr{Cvoid} for every opaque C struct) ────────────────
@@ -58,13 +71,11 @@ function init_logging()
 end
 
 function __init__()
-    if isfile(_DEPS_FILE)
-        try
-            check_deps()
-        catch err
-            @warn "TypeDBClient: library check failed – $(err)\n" *
-                  "Run `Pkg.build(\"TypeDBClient\")` to rebuild."
-        end
+    try
+        check_deps()
+    catch err
+        @warn "TypeDBClient: library check failed – $(err)\n" *
+              "Run `Pkg.build(\"TypeDBClient\")` to rebuild."
     end
 end
 
