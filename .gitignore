@@ -1,5 +1,6 @@
 deps/usr/lib/
 deps/build.log
+build/
 *.dylib
 *.so
 *.dll
