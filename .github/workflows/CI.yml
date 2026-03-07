@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  # ── Determine which TypeDB versions to test (latest 3 stable releases) ─────
+  get-typedb-versions:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.versions.outputs.versions }}
+    steps:
+      - name: Fetch latest 3 TypeDB releases
+        id: versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          versions=$(gh api repos/typedb/typedb/releases \
+            --jq '[.[] | select(.prerelease == false and .draft == false) | .tag_name] | .[0:3] | tojson')
+          # Fallback if API fails
+          if [[ -z "$versions" || "$versions" == "null" || "$versions" == "[]" ]]; then
+            versions='["3.8.1"]'
+          fi
+          echo "versions=$versions" >> $GITHUB_OUTPUT
+          echo "Testing against TypeDB versions: $versions"
+
+  # ── Run tests against each OS × TypeDB-version combination ──────────────────
+  test:
+    needs: get-typedb-versions
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        typedb-version: ${{ fromJson(needs.get-typedb-versions.outputs.versions) }}
+    runs-on: ${{ matrix.os }}
+    name: test (${{ matrix.os }}, TypeDB ${{ matrix.typedb-version }})
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.10'
+
+      - uses: julia-actions/cache@v2
+
+      # ── Download the C shared library that matches the server version ────────
+      - name: Download C library (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          v="${{ matrix.typedb-version }}"
+          url="https://dl.cloudsmith.io/public/typedb/public-release/raw/names/typedb-driver-clib-linux-x86_64/versions/${v}/typedb-driver-clib-linux-x86_64-${v}.tar.gz"
+          mkdir -p "$RUNNER_TEMP/typedb-lib"
+          curl -fsSL "$url" | tar -xz -C "$RUNNER_TEMP/typedb-lib"
+
+      - name: Download C library (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          v="${{ matrix.typedb-version }}"
+          url="https://dl.cloudsmith.io/public/typedb/public-release/raw/names/typedb-driver-clib-mac-arm64/versions/${v}/typedb-driver-clib-mac-arm64-${v}.zip"
+          mkdir -p "$RUNNER_TEMP/typedb-lib"
+          curl -fsSL -o "$RUNNER_TEMP/typedb-clib.zip" "$url"
+          unzip -q "$RUNNER_TEMP/typedb-clib.zip" -d "$RUNNER_TEMP/typedb-lib"
+
+      # ── Build Julia package ──────────────────────────────────────────────────
+      - name: Build Julia package
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            LIB=$(find "$RUNNER_TEMP/typedb-lib" -name "libtypedb_driver_clib.so" | head -1)
+          else
+            LIB=$(find "$RUNNER_TEMP/typedb-lib" -name "libtypedb_driver_clib.dylib" | head -1)
+          fi
+          echo "Found C library: $LIB"
+          TYPEDB_DRIVER_LIB="$LIB" julia --project -e 'using Pkg; Pkg.build("TypeDBClient")'
+
+      # ── Start TypeDB server (in background so unit tests run concurrently) ───
+      - name: Start TypeDB (Linux – Docker)
+        if: runner.os == 'Linux'
+        run: docker run -d --name typedb -p 1729:1729 typedb/typedb:${{ matrix.typedb-version }}
+
+      - name: Start TypeDB (macOS – native binary)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          v="${{ matrix.typedb-version }}"
+          url="https://dl.cloudsmith.io/public/typedb/public-release/raw/names/typedb-all-mac-arm64/versions/${v}/typedb-all-mac-arm64-${v}.zip"
+          curl -fsSL -o "$RUNNER_TEMP/typedb-server.zip" "$url"
+          unzip -q "$RUNNER_TEMP/typedb-server.zip" -d "$RUNNER_TEMP/typedb-server"
+          # Remove macOS quarantine to allow running the downloaded binary
+          xattr -dr com.apple.quarantine "$RUNNER_TEMP/typedb-server" 2>/dev/null || true
+          TYPEDB_BIN=$(find "$RUNNER_TEMP/typedb-server" -name "typedb" -type f | head -1)
+          chmod +x "$TYPEDB_BIN"
+          nohup "$TYPEDB_BIN" server \
+            > "$RUNNER_TEMP/typedb-server.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/typedb.pid"
+          echo "Started TypeDB PID $(cat $RUNNER_TEMP/typedb.pid)"
+
+      # ── Unit tests run while TypeDB is starting up ───────────────────────────
+      - name: Unit tests
+        run: julia --project -e 'using Pkg; Pkg.test("TypeDBClient")'
+
+      # ── Wait for TypeDB to be ready before integration tests ─────────────────
+      - name: Wait for TypeDB
+        shell: bash
+        run: |
+          for i in $(seq 1 30); do
+            nc -z localhost 1729 && echo "TypeDB is ready after $((i * 3)) s" && break
+            echo "Waiting for TypeDB ($i/30)…"
+            sleep 3
+          done
+          if ! nc -z localhost 1729; then
+            echo "::error::TypeDB did not start within 90 seconds"
+            if [[ -f "$RUNNER_TEMP/typedb-server.log" ]]; then
+              echo "=== TypeDB server log ==="
+              cat "$RUNNER_TEMP/typedb-server.log"
+            fi
+            exit 1
+          fi
+
+      # ── Integration tests ────────────────────────────────────────────────────
+      - name: Integration tests
+        env:
+          TYPEDB_TEST_ADDRESS: localhost:1729
+        run: julia --project -e 'using Pkg; Pkg.test("TypeDBClient")'
+
+      # ── Show TypeDB server log on failure (macOS) ────────────────────────────
+      - name: TypeDB server log (on failure)
+        if: failure() && runner.os == 'macOS'
+        shell: bash
+        run: cat "$RUNNER_TEMP/typedb-server.log" 2>/dev/null || echo "(no log found)"
