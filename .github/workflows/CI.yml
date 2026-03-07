@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [master]
 
+# Oldest TypeDB release whose C API is compatible with this client.
+# Update when the client starts using symbols from a newer release.
+env:
+  MIN_TYPEDB_VERSION: "3.8.1"
+
 jobs:
   # ── Determine which TypeDB versions to test (latest 3 stable releases) ─────
   get-typedb-versions:
@@ -18,11 +23,30 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          versions=$(gh api repos/typedb/typedb/releases \
-            --jq '[.[] | select(.prerelease == false and .draft == false) | .tag_name] | .[0:3] | tojson')
-          # Fallback if API fails
+          MIN="${{ env.MIN_TYPEDB_VERSION }}"
+
+          # Fetch all non-prerelease, non-draft release tags that match pure
+          # semver (X.Y.Z) — this excludes RCs that TypeDB occasionally marks
+          # as non-prerelease on GitHub (e.g. "3.8.0-rc0").
+          all=$(gh api repos/typedb/typedb/releases \
+            --jq '[.[] | select(.prerelease == false and .draft == false)
+                        | .tag_name
+                        | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))] | .[]')
+
+          # Filter to versions >= MIN and keep the 3 newest (API returns newest first).
+          versions=$(echo "$all" | awk -F. -v min="$MIN" '
+            BEGIN { split(min, m, ".")
+                    m1=m[1]+0; m2=m[2]+0; m3=m[3]+0 }
+            { v1=$1+0; v2=$2+0; v3=$3+0
+              if (v1>m1 || (v1==m1 && (v2>m2 || (v2==m2 && v3>=m3))))
+                { print; count++ }
+            }
+            count >= 3 { exit }
+          ' | jq -R -s 'split("\n") | map(select(. != "")) | tojson')
+
+          # Fallback if API fails or returns nothing
           if [[ -z "$versions" || "$versions" == "null" || "$versions" == "[]" ]]; then
-            versions='["3.8.1"]'
+            versions="[\"${MIN}\"]"
           fi
           echo "versions=$versions" >> $GITHUB_OUTPUT
           echo "Testing against TypeDB versions: $versions"
