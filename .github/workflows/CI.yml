@@ -42,7 +42,7 @@ jobs:
                 { print; count++ }
             }
             count >= 3 { exit }
-          ' | jq -R -s 'split("\n") | map(select(. != ""))')
+          ' | jq -R -c -s 'split("\n") | map(select(. != ""))')
 
           # Fallback if API fails or returns nothing
           if [[ -z "$versions" || "$versions" == "null" || "$versions" == "[]" ]]; then
