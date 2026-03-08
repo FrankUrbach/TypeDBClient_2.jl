@@ -30,6 +30,67 @@ const ConceptIterHandle           = Ptr{Cvoid}
 const ConceptHandle               = Ptr{Cvoid}
 const StringIterHandle            = Ptr{Cvoid}
 const ErrorHandle                 = Ptr{Cvoid}
+const StringAndOptValueHandle     = Ptr{Cvoid}
+const StringAndOptValueIterHandle = Ptr{Cvoid}
+
+# ─── C struct types for by-value FFI returns ─────────────────────────────────
+#
+# These mirror `#[repr(C)]` Rust structs from the C driver layer exactly.
+# Explicit `_pad` fields match the x86-64 System V ABI tail-padding rules
+# so that `sizeof(Julia struct) == sizeof(C struct)`.
+#
+#   Decimal              { i64, u64 }                  → 16 bytes
+#   DatetimeInNanos      { i64, u32, [4 pad] }         → 16 bytes
+#   Duration             { u32, u32, u64 }             → 16 bytes
+#   DatetimeAndTimeZone  { DatetimeInNanos, *c_char,
+#                          i32, bool, [3 pad] }         → 32 bytes
+#   StringAndOptValue    { *c_char, *Concept }          → 16 bytes
+
+"FFI mirror of Rust `Decimal { integer: i64, fractional: u64 }` (16 bytes, repr(C))."
+struct Decimal
+    integer::Int64
+    fractional::UInt64
+end
+
+"FFI mirror of Rust `DatetimeInNanos { seconds: i64, subsec_nanos: u32 }` (16 bytes, 4-byte tail pad)."
+struct DatetimeInNanos
+    seconds::Int64
+    subsec_nanos::UInt32
+    _pad::UInt32
+end
+
+"FFI mirror of Rust `Duration { months: u32, days: u32, nanos: u64 }` (16 bytes, repr(C))."
+struct Duration
+    months::UInt32
+    days::UInt32
+    nanos::UInt64
+end
+
+"""
+FFI mirror of Rust `DatetimeAndTimeZone` (32 bytes, repr(C)).
+
+`zone_name` is a Rust-owned `*mut c_char`; always free it with `string_free`
+after reading (non-null even for fixed-offset entries, which use an empty string).
+When `is_fixed_offset == true`, use `local_minus_utc_offset`; otherwise read `zone_name`.
+"""
+struct DatetimeAndTimeZone
+    datetime_in_nanos::DatetimeInNanos   # 16 bytes at offset  0
+    zone_name::Ptr{UInt8}               #  8 bytes at offset 16  (Rust-owned)
+    local_minus_utc_offset::Int32        #  4 bytes at offset 24
+    is_fixed_offset::Bool               #  1 byte  at offset 28
+    _pad1::UInt8                        #  1 byte  padding
+    _pad2::UInt16                       #  2 bytes padding
+end
+
+"""
+FFI mirror of Rust `StringAndOptValue { string: *mut c_char, value: *mut Concept }` (16 bytes).
+
+Both fields are Rust-owned; free the whole item via `string_and_opt_value_drop`.
+"""
+struct StringAndOptValue
+    string_ptr::Ptr{UInt8}   # Rust-owned field name
+    value_ptr::ConceptHandle  # Rust-owned Concept (may be C_NULL for absent fields)
+end
 
 # ─── Logging ────────────────────────────────────────────────────────────────────
 
@@ -366,5 +427,45 @@ concept_get_date_as_seconds(c::ConceptHandle) =
 entity_get_type(c::ConceptHandle)    = ccall((:entity_get_type,    libtypedb), ConceptHandle, (ConceptHandle,), c)
 relation_get_type(c::ConceptHandle)  = ccall((:relation_get_type,  libtypedb), ConceptHandle, (ConceptHandle,), c)
 attribute_get_type(c::ConceptHandle) = ccall((:attribute_get_type, libtypedb), ConceptHandle, (ConceptHandle,), c)
+
+# ─── Extended value getters (by-value struct returns) ────────────────────────
+
+concept_get_decimal(c::ConceptHandle) =
+    ccall((:concept_get_decimal, libtypedb), Decimal, (ConceptHandle,), c)
+
+concept_get_datetime(c::ConceptHandle) =
+    ccall((:concept_get_datetime, libtypedb), DatetimeInNanos, (ConceptHandle,), c)
+
+concept_get_datetime_tz(c::ConceptHandle) =
+    ccall((:concept_get_datetime_tz, libtypedb), DatetimeAndTimeZone, (ConceptHandle,), c)
+
+concept_get_duration(c::ConceptHandle) =
+    ccall((:concept_get_duration, libtypedb), Duration, (ConceptHandle,), c)
+
+concept_get_struct(c::ConceptHandle) =
+    ccall((:concept_get_struct, libtypedb), StringAndOptValueIterHandle,
+          (ConceptHandle,), c)
+
+# Concept equality
+concept_equals(lhs::ConceptHandle, rhs::ConceptHandle) =
+    ccall((:concept_equals, libtypedb), Bool, (ConceptHandle, ConceptHandle), lhs, rhs)
+
+# ─── StringAndOptValue iterator ───────────────────────────────────────────────
+
+string_and_opt_value_iterator_next(it::StringAndOptValueIterHandle) =
+    ccall((:string_and_opt_value_iterator_next, libtypedb), StringAndOptValueHandle,
+          (StringAndOptValueIterHandle,), it)
+
+string_and_opt_value_iterator_drop(it::StringAndOptValueIterHandle) =
+    ccall((:string_and_opt_value_iterator_drop, libtypedb), Cvoid,
+          (StringAndOptValueIterHandle,), it)
+
+string_and_opt_value_drop(sav::StringAndOptValueHandle) =
+    ccall((:string_and_opt_value_drop, libtypedb), Cvoid,
+          (StringAndOptValueHandle,), sav)
+
+# string_free overload for Ptr{UInt8} (needed to free zone_name in DatetimeAndTimeZone)
+string_free(ptr::Ptr{UInt8}) =
+    ccall((:string_free, libtypedb), Cvoid, (Ptr{UInt8},), ptr)
 
 end # module FFI

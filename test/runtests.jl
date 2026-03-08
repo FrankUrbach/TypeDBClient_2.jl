@@ -5,6 +5,7 @@ using TypeDBClient
 @testset "TypeDBClient Unit Tests" begin
     include("unit/test_error.jl")
     include("unit/test_strings.jl")
+    include("unit/test_concept.jl")
 end
 
 # ─── Integration tests (require a running TypeDB server) ─────────────────────
@@ -17,6 +18,7 @@ if !isempty(TEST_ADDRESS)
         include("integration/test_databases.jl")
         include("integration/test_transaction.jl")
         include("integration/test_query.jl")
+        include("integration/test_concept_types.jl")
     end
 else
     @info "Skipping integration tests (set TYPEDB_TEST_ADDRESS=host:port to enable)"

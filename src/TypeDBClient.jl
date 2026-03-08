@@ -1,7 +1,7 @@
 module TypeDBClient
 
 # ─── Load deps (provides `libtypedb` and `check_deps`) ────────────────────────
-using Artifacts, Libdl
+using Artifacts, Libdl, Dates
 
 const _ARTIFACTS_TOML = joinpath(@__DIR__, "..", "Artifacts.toml")
 include_dependency(_ARTIFACTS_TOML)   # invalidate precompile cache when Artifacts.toml changes
