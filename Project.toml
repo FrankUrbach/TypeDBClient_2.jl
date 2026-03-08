@@ -1,11 +1,12 @@
 name = "TypeDBClient3"
 uuid = "e65b8614-ec10-4d8b-a9fb-bd44bc213d71"
-authors = ["Frank Urbach"]
 version = "0.1.0"
+authors = ["Frank Urbach"]
 
 [deps]
 Artifacts = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+Gherkin = "30f46725-be1c-4b6b-9edd-e96e9b6c9ac9"
 Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
 Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 
@@ -13,7 +14,8 @@ Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 julia = "1.6"
 
 [extras]
+Gherkin = "30f46725-be1c-4b6b-9edd-e96e9b6c9ac9"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test"]
+test = ["Gherkin", "Test"]

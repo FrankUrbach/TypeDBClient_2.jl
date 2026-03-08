@@ -20,6 +20,10 @@ if !isempty(TEST_ADDRESS)
         include("integration/test_query.jl")
         include("integration/test_concept_types.jl")
     end
+
+    @testset "TypeDBClient3 Behaviour Tests" begin
+        include("behaviour/run_behaviour.jl")
+    end
 else
     @info "Skipping integration tests (set TYPEDB_TEST_ADDRESS=host:port to enable)"
 end;

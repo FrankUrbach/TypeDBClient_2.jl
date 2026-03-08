@@ -152,3 +152,48 @@ end
 function transaction(f::Function, db::Database, tx_type::Int32; kwargs...)
     transaction(f, db.driver, db._name, tx_type; kwargs...)
 end
+
+# ─── Public low-level open ────────────────────────────────────────────────────
+
+"""
+    open_transaction(driver, db_name, tx_type; timeout_ms, schema_lock_ms) -> Transaction
+
+Open a transaction directly (without a do-block).  The caller is responsible
+for calling `commit`, `rollback`, or `close` when done.
+
+```julia
+tx = open_transaction(driver, "mydb", TransactionType.READ)
+# ... use tx ...
+close(tx)
+```
+"""
+function open_transaction(driver::TypeDBDriver, db_name::AbstractString,
+                          tx_type::Int32;
+                          timeout_ms::Union{Int64,Nothing}      = nothing,
+                          schema_lock_ms::Union{Int64,Nothing}  = nothing)::Transaction
+    _open_transaction(driver, db_name, tx_type, timeout_ms, schema_lock_ms)
+end
+
+"""
+    close(tx::Transaction)
+
+Close the transaction without committing.  Idempotent.
+"""
+Base.close(tx::Transaction) = _close_sync(tx)
+
+"""
+    transaction_type_name(tx::Transaction) -> String
+
+Return the transaction type as a lower-case string: `"read"`, `"write"`, or `"schema"`.
+"""
+function transaction_type_name(tx::Transaction)::String
+    if tx.tx_type == TransactionType.READ
+        return "read"
+    elseif tx.tx_type == TransactionType.WRITE
+        return "write"
+    elseif tx.tx_type == TransactionType.SCHEMA
+        return "schema"
+    else
+        return "unknown"
+    end
+end

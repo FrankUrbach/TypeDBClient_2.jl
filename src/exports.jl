@@ -67,6 +67,8 @@ export database_type_schema
 
 # ── Transactions ──────────────────────────────────────────────────────────────
 export transaction
+export open_transaction
+export transaction_type_name
 export commit
 export rollback
 
