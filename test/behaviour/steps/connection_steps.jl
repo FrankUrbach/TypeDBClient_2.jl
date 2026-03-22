@@ -4,7 +4,9 @@ using Test
 
 # ─── typedb starts ─────────────────────────────────────────────────────────────
 @step "typedb starts"
-(ctx) -> nothing
+function (ctx)
+    nothing
+end
 
 # ─── connection is open ────────────────────────────────────────────────────────
 @step r"^connection is open: (true|false)$"
