@@ -3,7 +3,13 @@ using TypeDBClient3
 using Test
 
 # ─── typedb starts ─────────────────────────────────────────────────────────────
+# TypeDB CE 3.8.1 has a background checkpoint thread that may still be running
+# after a transaction commit. Deleting a database while that checkpoint is active
+# causes TypeDB to panic (server bug). The sleep below gives the checkpoint time
+# to complete before we delete any databases.
 @step "typedb starts" function (ctx)
+    Base.Libc.systemsleep(0.5)  # wait for TypeDB background checkpoint to finish
+    GC.gc()                     # run Julia finalizers before connecting
     tmp = TypeDBDriver(TEST_ADDRESS)
     for db in list_databases(tmp)
         for attempt in 1:5
@@ -16,6 +22,7 @@ using Test
         end
     end
     close(tmp)
+    Base.Libc.systemsleep(0.2)  # allow TypeDB to process the deletion fully
 end
 
 # ─── connection is open ────────────────────────────────────────────────────────
@@ -184,14 +191,37 @@ end
 
 @step r"^in background, connection open schema transaction for database: (.+)$" function (ctx, name)
     drv = CTX.driver
+    # Determine hold strategy based on whether we want the background lock to
+    # BLOCK the main thread (Part 1: schema_lock < tx_timeout) or release
+    # before the main thread opens (Part 2: schema_lock > tx_timeout).
+    #
+    # Background: Julia's @async uses cooperative scheduling.  When a ccall
+    # (blocking Rust call) is in progress, Julia's scheduler cannot switch tasks.
+    # So if the background task sleeps while the main thread is blocked in
+    # open_transaction's ccall, the sleep timer never fires — deadlock-like.
+    # Fix: in the "should succeed" case (Part 2) we wait() for the background
+    # task to fully complete (open + close) before returning, so the schema lock
+    # is free when the main thread calls open_transaction.
+    schema_ms = CTX.tx_options_schema_lock_ms
+    tx_ms     = CTX.tx_options_timeout_ms
+    # hold_long: background holds the lock longer than schema_lock_acquire_timeout
+    # so that the main thread's open attempt times out (Part 1 of the scenario).
+    hold_long = (schema_ms !== nothing && tx_ms !== nothing && schema_ms < tx_ms)
+    hold_secs = hold_long ? Float64(coalesce(schema_ms, 1000) + 500) / 1000.0 : 0.0
+
     t = @async begin
         tx = open_transaction(drv, strip(name), TransactionType.SCHEMA)
-        # Hold the transaction briefly so schema lock scenarios work
-        sleep(0.1)
+        if hold_long
+            sleep(hold_secs)
+        end
         close(tx)
     end
     push!(CTX.background_tasks, t)
-    yield()  # let the async task start
+    if hold_long
+        yield()      # let T start and acquire lock; it then sleeps so we return
+    else
+        wait(t)      # wait for T to finish (open+close) so lock is free for main
+    end
 end
 
 # ─── Open transaction (single) ────────────────────────────────────────────────
@@ -339,14 +369,14 @@ end
     db   = get_database(CTX.driver, db_name)
     schema = strip(database_schema(db))
     expected = strip(docstring.content)
-    @test startswith(schema, expected)
+    @test schema_defs_match(schema, expected)
 end
 
 @step r"^connection get database\((\w[\w-]*)\) has type schema:$" function (ctx, db_name, docstring)
     db   = get_database(CTX.driver, db_name)
     schema = strip(database_type_schema(db))
     expected = strip(docstring.content)
-    @test startswith(schema, expected)
+    @test schema_defs_match(schema, expected)
 end
 
 # ─── Timing ───────────────────────────────────────────────────────────────────

@@ -100,8 +100,13 @@ end
 Permanently delete a database.
 """
 function delete_database(db::Database)
-    @checkerr FFI.database_delete(db.handle)
+    FFI.database_delete(db.handle)
+    # database_delete uses take_arc() internally: the Arc reference for db.handle is
+    # consumed unconditionally, whether the server-side delete succeeds or fails.
+    # Mark _closed NOW so the finalizer never calls database_close on the same pointer
+    # (which would decrement an already-freed Arc → use-after-free).
     db._closed = true
+    check_and_throw()
     nothing
 end
 

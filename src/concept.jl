@@ -864,10 +864,20 @@ The result of a TypeDB query.  Depending on the query type it holds:
 mutable struct QueryAnswer
     handle::QueryAnswerHandle
     _consumed::Bool
+    _is_ok::Bool
+    _is_row_stream::Bool
+    _is_document_stream::Bool
 
     function QueryAnswer(handle::QueryAnswerHandle)
         handle == C_NULL && error("QueryAnswer handle is NULL")
-        obj = new(handle, false)
+        # Cache type flags at construction time.
+        # After rows()/documents() consumes the handle via take_ownership in Rust,
+        # the original pointer is freed; reading it afterwards is undefined behaviour.
+        # Caching here makes is_ok/is_row_stream/is_document_stream safe post-consume.
+        _ok   = FFI.query_answer_is_ok(handle)
+        _rows = FFI.query_answer_is_concept_row_stream(handle)
+        _docs = FFI.query_answer_is_concept_document_stream(handle)
+        obj = new(handle, false, _ok, _rows, _docs)
         finalizer(obj) do qa
             qa._consumed || (qa._consumed = true; FFI.query_answer_drop(qa.handle))
         end
@@ -876,13 +886,13 @@ mutable struct QueryAnswer
 end
 
 """    is_ok(answer::QueryAnswer) -> Bool"""
-is_ok(qa::QueryAnswer) = FFI.query_answer_is_ok(qa.handle)
+is_ok(qa::QueryAnswer) = qa._is_ok
 
 """    is_row_stream(answer::QueryAnswer) -> Bool"""
-is_row_stream(qa::QueryAnswer) = FFI.query_answer_is_concept_row_stream(qa.handle)
+is_row_stream(qa::QueryAnswer) = qa._is_row_stream
 
 """    is_document_stream(answer::QueryAnswer) -> Bool"""
-is_document_stream(qa::QueryAnswer) = FFI.query_answer_is_concept_document_stream(qa.handle)
+is_document_stream(qa::QueryAnswer) = qa._is_document_stream
 
 """
     rows(answer::QueryAnswer) -> ConceptRowIterator
@@ -891,6 +901,7 @@ Convert a row-stream answer into a Julia iterator.  Can only be called once.
 """
 function rows(qa::QueryAnswer)::ConceptRowIterator
     qa._consumed && error("QueryAnswer already consumed")
+    is_row_stream(qa) || error("QueryAnswer is not a rows stream")
     qa._consumed = true
     h = FFI.query_answer_into_rows(qa.handle)
     check_and_throw()

@@ -72,10 +72,14 @@ function commit(tx::Transaction)
     tx._committed && error("Transaction already committed")
     tx._closed && error("Transaction already closed")
     prom = FFI.transaction_commit(tx.handle)
+    # transaction_commit uses take_ownership() internally: the native Transaction object
+    # is freed by Rust immediately, regardless of whether the commit succeeds or fails.
+    # Mark _closed NOW so that no subsequent code (finalizer, _close_sync, isopen) tries
+    # to use tx.handle again — doing so would be a use-after-free or double-free.
+    tx._closed = true
     FFI.void_promise_resolve(prom)
     check_and_throw()
     tx._committed = true
-    tx._closed    = true
     nothing
 end
 

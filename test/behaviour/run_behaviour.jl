@@ -19,14 +19,32 @@ const BEHAVIOUR_EXCLUDE_TAGS = [
 # ─── Run all feature files ─────────────────────────────────────────────────────
 const FEATURES_DIR = joinpath(@__DIR__, "features")
 
+# Optional filter: set BEHAVIOUR_FEATURE_FILES to a comma-separated list of
+# relative paths (e.g. "driver/query.feature,driver/connection.feature") to
+# restrict which feature files are executed.
+const _FEATURE_FILTER = let v = get(ENV, "BEHAVIOUR_FEATURE_FILES", "")
+    isempty(v) ? nothing : Set(split(v, ",") .|> strip)
+end
+
 for (root, dirs, files) in walkdir(FEATURES_DIR)
     sort!(files)
     for file in files
         endswith(file, ".feature") || continue
         feature_path = joinpath(root, file)
+        # Apply optional filter (match against relative path from FEATURES_DIR)
+        if _FEATURE_FILTER !== nothing
+            rel = relpath(feature_path, FEATURES_DIR)
+            rel in _FEATURE_FILTER || continue
+        end
         @info "Running feature: $file"
         feature = Gherkin.parse_feature(feature_path)
-        Gherkin.run_feature(feature, Gherkin.GLOBAL_REGISTRY;
-                            exclude_tags = BEHAVIOUR_EXCLUDE_TAGS)
+        try
+            Gherkin.run_feature(feature, Gherkin.GLOBAL_REGISTRY;
+                                exclude_tags = BEHAVIOUR_EXCLUDE_TAGS)
+        catch e
+            e isa Test.TestSetException || rethrow()
+            # TestSetException means some @tests failed — already reported above.
+            # Continue running remaining feature files so we get full coverage.
+        end
     end
 end
